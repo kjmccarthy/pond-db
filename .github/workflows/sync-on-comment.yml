@@ -1,0 +1,62 @@
+name: Sync UAT via Comment
+
+env:
+  event_name: ${{ github.event_name }}
+  api_url: ${{ github.api_url }}
+  
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  uat_sync: 
+    runs-on: ubuntu-latest
+    
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, 'sync uat')
+    steps:
+      - name: get the branch name
+        id: 'get_pr_branch'
+        run: echo "PR_BRANCH=$(gh pr view $PR_NO --repo $REPO --json headRefName --jq '.headRefName')" >> $GITHUB_OUTPUT
+        env:
+          REPO: ${{ github.repository }}
+          PR_NO: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+          
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.get_pr_branch.outputs.PR_BRANCH }}
+
+      - name: check mergeStateStatus
+        id: check_merge_state_status
+        continue-on-error: true
+        run: |
+          if [ "$(gh pr view $PR_NO --repo $REPO --json mergeStateStatus --jq '.mergeStateStatus')" = "BEHIND" ]; then
+            echo "Cannot sync UAT: This PR must be up to date with the target branch before syncing UAT"
+            exit 1
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          PR_NO: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+      - name: add_pr_comment
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const name = '${{ github.workflow }}';
+            const url = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
+            let body;
+            if ('${{ steps.check_merge_state_status.outcome }}' === 'failure') {
+              body = 'Cannot sync UAT: This PR must be mergeable before syncing UAT';
+            } else {
+              body = `${name} ${'is running:'}\n${url}`;
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            })
