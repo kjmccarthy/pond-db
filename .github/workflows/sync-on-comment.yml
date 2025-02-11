@@ -60,3 +60,9 @@ jobs:
               repo: context.repo.repo,
               body: body
             })
+
+      - name: print status
+        id: status
+        if: steps.check_merge_state_status.outcome == 'success'
+        run: |
+          echo "RUNNING"
